@@ -20,4 +20,10 @@ https://www.enterprisedb.com/postgres-tutorials/history-improvements-vacuum-post
 
 (2) 在系统中只存在少量的几个可用的 `autovacuum` 进程在 `VACUUM` 其他表，这可能意味着其他的表也没有被迅速地 `VACUUM`
 
-这两个问题都可以导致数据表膨胀。PG 9.1 通过让 `autovacuum` 跳过那些需要 `VACUUM` 但无法立刻获取表锁的表对这个问题进行了一些缓解。
+这两个问题都可以导致数据表膨胀。PG 9.1 通过让 `autovacuum` 跳过那些需要 `VACUUM` 但无法立刻获取表锁的表对这个问题进行了一些缓解；因为 `autovacuum` 每分钟重试一次，这不会造成什么害处。PG 9.2 也做了一些改进，系统会跳过单个表的一些 block ，当无法立刻获取 cleanup lock 时，除非这个 block 包含需要删除的元组或需要冻结的元组的情况 和 `VACUUM` 是为了防止事务ID回卷的情况。PG 9.5 减少了  btree 索引 index scan 时在最后一个访问的 index page 上留一个 PIN 标记的情况，这消除了大量的 `VACUUM` 因为 index scan 而卡住的情况。上面描述的改进的情况很清晰，index scan 卡住的问题没有被完全解决，但是我们稳定了减少了这个问题发生的场景。
+
+​		也存在一些致力于减少 `VACUUM` 扫描每个 heap page 的次数的改进。在 PG 9.3 之前，一个在两次 `VACUUM` 之间没有被修改的表 page 将会被第二个 `VACUUM` 标记为 all-visible ，并会被之后的 `VACUUM` 跳过，除非是被触发来防止事务ID回卷的 `VACUUM`。在 PG 9.6，被触发来防止事务ID回卷的 `VACUUM` 也可以跳过页。要做到这个，visibility map 别深入改进来保持不仅跟踪是否页是 all-visible(这是说，没有包含任何死亡元组)，还跟踪它们是否是 all-frozen(这是说，不包含任何可能导致事务ID回卷风险的元组)。在后一种策略中的页可以被无条件地跳过；它们不能被 `VACUUM` 以任何目的而感兴趣。
+
+​	除了上面提到的之外，还存在一个稳定的流，来记录改进和一些其他的有效的改进，这些年。
+
+​	接下来该做什么呢？PG 开发社区取得了巨大的进步，在减少 `VACUUM` 对表执行不必要的扫描的程度上，但是基本上一点也没进步在避免对索引不必要的扫描。例如，甚至一个发现没有死亡元组的 `VACUUM` 仍然会扫描 btree 索引来循环空页。改进这个问题的工作正在进行，但在一些关于 btree 索引如何与事务ID回卷的细节上磕磕绊绊。还有个期待的改进是：改进在 存在一些，但不是很多死亡元组的 情况下的行为。如果 1TB 
